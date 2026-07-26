@@ -129,16 +129,27 @@ final class SerialPort {
         options.c_cc.16 = 0 // VMIN
         options.c_cc.17 = 1 // VTIME, 100 ms
 
-        let speed = Self.speedConstant(session.baudRate)
+        let speed = Self.speedConstant(session.baudRate) ?? speed_t(B9600)
         guard cfsetispeed(&options, speed) == 0,
               cfsetospeed(&options, speed) == 0,
               tcsetattr(fd, TCSANOW, &options) == 0 else {
             throw SerialError.configureFailed(String(cString: strerror(errno)))
         }
+        if Self.speedConstant(session.baudRate) == nil {
+            guard (50...4_000_000).contains(session.baudRate) else {
+                throw SerialError.configureFailed("自定义波特率必须在 50～4,000,000 之间")
+            }
+            var customSpeed = speed_t(session.baudRate)
+            // IOSSIOSPEED = _IOW('T', 2, speed_t), required for non-POSIX baud rates on macOS.
+            let iosSIOSpeed: UInt = 0x8008_5402
+            guard ioctl(fd, iosSIOSpeed, &customSpeed) == 0 else {
+                throw SerialError.configureFailed("设备不支持 \(session.baudRate) bps：\(String(cString: strerror(errno)))")
+            }
+        }
         tcflush(fd, TCIOFLUSH)
     }
 
-    private static func speedConstant(_ baud: Int) -> speed_t {
+    private static func speedConstant(_ baud: Int) -> speed_t? {
         switch baud {
         case 50: return speed_t(B50)
         case 75: return speed_t(B75)
@@ -158,7 +169,7 @@ final class SerialPort {
         case 57600: return speed_t(B57600)
         case 115200: return speed_t(B115200)
         case 230400: return speed_t(B230400)
-        default: return speed_t(B115200)
+        default: return nil
         }
     }
 

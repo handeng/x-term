@@ -2,16 +2,18 @@
 
 XTerm 是原生 macOS 串口终端，采用左侧会话列表、右侧终端工作区布局。最低支持 macOS 13，可构建为同时支持 Intel（x86_64）和 Apple Silicon（arm64）的通用应用。
 
+本项目采用 [GNU General Public License v3.0 或更高版本](LICENSE) 开源。
+
 ## 下载
 
-从 [GitHub Releases](https://github.com/handeng/x-term/releases/latest) 下载 `XTerm-v1.0.0-macos-universal.zip`，解压后将 `XTerm.app` 移入“应用程序”文件夹。
+从 [GitHub Releases](https://github.com/handeng/x-term/releases/latest) 下载最新的 macOS Universal 压缩包，解压后将 `XTerm.app` 移入“应用程序”文件夹。
 
 当前公开构建采用 ad-hoc 签名，尚未经过 Apple notarization。macOS 如果阻止首次打开，可在 Finder 中右键应用并选择“打开”；仅从本仓库的 Releases 页面获取构建。
 
 ## 功能
 
 - 会话新增、复制、删除及自动持久化
-- 串口热插拔扫描，支持常用波特率、7/8 数据位、1/2 停止位、奇偶校验和软/硬流控
+- 串口热插拔扫描，支持常用及自定义波特率、7/8 数据位、1/2 停止位、奇偶校验和软/硬流控
 - 意外断线自动重连
 - ASCII/HEX 发送与显示、CR/LF/CRLF 行尾、本地回显
 - RX/TX/SYS 分向日志、毫秒时间戳、跟随尾部、复制和导出

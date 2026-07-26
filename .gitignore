@@ -3,5 +3,6 @@
 .swiftpm/
 DerivedData/
 dist/
+Resources/AppIcon.iconset/
 *.xcuserstate
 *.xcworkspace/xcuserdata/

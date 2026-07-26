@@ -28,5 +28,22 @@ struct XTermApp: App {
             SettingsView()
                 .environmentObject(appModel)
         }
+        Window("关于 XTerm", id: "about-xterm") {
+            AboutView()
+        }
+        .windowResizability(.contentSize)
+        .commands {
+            AboutCommands()
+        }
+    }
+}
+
+private struct AboutCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            Button("关于 XTerm") { openWindow(id: "about-xterm") }
+        }
     }
 }
