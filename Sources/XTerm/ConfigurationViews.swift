@@ -3,6 +3,8 @@ import SwiftUI
 struct SessionConfigurationView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var useCustomBaud = false
+    private let standardBaudRates = [300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,10 +23,22 @@ struct SessionConfigurationView: View {
                         }
                         Button { model.refreshPorts() } label: { Image(systemName: "arrow.clockwise") }
                     }
-                    Picker("波特率", selection: binding(\.baudRate)) {
-                        ForEach([300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400], id: \.self) {
+                    Picker("波特率", selection: baudRateChoice) {
+                        ForEach(standardBaudRates, id: \.self) {
                             Text("\($0)").tag($0)
                         }
+                        Divider()
+                        Text("自定义…").tag(-1)
+                    }
+                    if useCustomBaud {
+                        HStack {
+                            TextField("自定义波特率", value: binding(\.baudRate),
+                                      format: .number.grouping(.never))
+                                .textFieldStyle(.roundedBorder)
+                            Text("bps").foregroundStyle(.secondary)
+                        }
+                        Text("支持范围为 50～4,000,000 bps；最终可用值取决于串口设备和驱动。")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     HStack {
                         Picker("数据位", selection: binding(\.dataBits)) {
@@ -63,11 +77,34 @@ struct SessionConfigurationView: View {
                 Button("完成") { dismiss() }.keyboardShortcut(.defaultAction)
             }.padding()
         }
+        .onAppear {
+            if let baud = model.selectedSession?.baudRate {
+                useCustomBaud = !standardBaudRates.contains(baud)
+            }
+        }
     }
 
     private func binding<T>(_ keyPath: WritableKeyPath<SerialSession, T>) -> Binding<T> {
         Binding { model.selectedSession![keyPath: keyPath] }
         set: { value in model.updateSelected { $0[keyPath: keyPath] = value } }
+    }
+
+    private var baudRateChoice: Binding<Int> {
+        Binding {
+            guard let baud = model.selectedSession?.baudRate else { return 115200 }
+            return useCustomBaud || !standardBaudRates.contains(baud) ? -1 : baud
+        } set: { value in
+            if value == -1 {
+                useCustomBaud = true
+                if let current = model.selectedSession?.baudRate,
+                   standardBaudRates.contains(current) {
+                    model.updateSelected { $0.baudRate = current }
+                }
+            } else {
+                useCustomBaud = false
+                model.updateSelected { $0.baudRate = value }
+            }
+        }
     }
 }
 
@@ -195,5 +232,29 @@ struct SettingsView: View {
             Text("XTerm 会将会话配置保存在当前用户的 Application Support 目录。")
             Text("串口访问不启用 App Sandbox，以允许访问 /dev/cu.* 设备。")
         }.formStyle(.grouped).frame(width: 460, height: 160)
+    }
+}
+
+struct AboutView: View {
+    private let contactEmail = "andy@ywsy.net"
+
+    var body: some View {
+        VStack(spacing: 14) {
+            if let image = NSImage(named: "XTerm") ?? NSImage(named: NSImage.applicationIconName) {
+                Image(nsImage: image)
+                    .resizable()
+                    .frame(width: 96, height: 96)
+            }
+            Text("XTerm").font(.title.bold())
+            Text("版本 1.1.0").foregroundStyle(.secondary)
+            Text("原生 macOS 串口终端")
+            Link(contactEmail, destination: URL(string: "mailto:\(contactEmail)")!)
+                .textSelection(.enabled)
+            Link("GitHub 项目主页", destination: URL(string: "https://github.com/handeng/x-term")!)
+            Text("Copyright © 2026 handeng\nGNU General Public License v3.0 or later")
+                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .padding(32)
+        .frame(width: 420)
     }
 }
