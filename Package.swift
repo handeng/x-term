@@ -7,9 +7,13 @@ let package = Package(
     products: [
         .executable(name: "XTerm", targets: ["XTerm"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.15.0")
+    ],
     targets: [
         .executableTarget(
             name: "XTerm",
+            dependencies: ["SwiftTerm"],
             path: "Sources/XTerm",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

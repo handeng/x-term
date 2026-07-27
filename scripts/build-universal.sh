@@ -16,6 +16,7 @@ mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 lipo -create "$arm_bin" "$x64_bin" -output "$app_dir/Contents/MacOS/XTerm"
 cp "Resources/Info.plist" "$app_dir/Contents/Info.plist"
 cp "Resources/XTerm.icns" "$app_dir/Contents/Resources/XTerm.icns"
+cp "THIRD_PARTY_NOTICES.md" "$app_dir/Contents/Resources/THIRD_PARTY_NOTICES.md"
 codesign --force --deep --sign - "$app_dir"
 
 echo "Built: $app_dir"

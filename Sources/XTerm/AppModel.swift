@@ -22,7 +22,12 @@ final class AppModel: ObservableObject {
     private var receiveBuffer = Data()
     private var manualDisconnect = false
     private var cancellables: Set<AnyCancellable> = []
-    private let maxLogEntries = 20_000
+    private var terminalHandler: ((Data?) -> Void)?
+    private(set) var retainedLogBytes = 0
+    private let maxLogEntries = 4_000
+    private let targetLogEntries = 3_000
+    private let maxLogBytes = 8 * 1024 * 1024
+    private let targetLogBytes = 6 * 1024 * 1024
     private let maxReceiveBuffer = 64 * 1024
 
     var selectedSession: SerialSession? {
@@ -44,6 +49,13 @@ final class AppModel: ObservableObject {
         portRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshPorts() }
         }
+    }
+
+    deinit {
+        portRefreshTimer?.invalidate()
+        reconnectTask?.cancel()
+        loginTask?.cancel()
+        autoCommandTimers.values.forEach { $0.invalidate() }
     }
 
     func addSession() { store.add() }
@@ -128,8 +140,21 @@ final class AppModel: ObservableObject {
     }
 
     func clearLog() {
-        logs.removeAll(keepingCapacity: true)
+        logs.removeAll(keepingCapacity: false)
+        retainedLogBytes = 0
         receiveBuffer.removeAll(keepingCapacity: true)
+        terminalHandler?(nil)
+    }
+
+    /// Attaches the visible VT terminal. Existing RX data is replayed so switching
+    /// between HEX and terminal modes does not lose the current screen contents.
+    func setTerminalHandler(_ handler: ((Data?) -> Void)?) {
+        terminalHandler = handler
+        guard let handler else { return }
+        handler(nil)
+        for entry in logs where entry.direction == .received {
+            handler(entry.data)
+        }
     }
 
     func copyLog() {
@@ -194,6 +219,7 @@ final class AppModel: ObservableObject {
 
     private func handleReceived(_ data: Data) {
         append(LogEntry(timestamp: Date(), direction: .received, data: data, message: nil))
+        terminalHandler?(data)
         receiveBuffer.append(data)
         if receiveBuffer.count > maxReceiveBuffer {
             receiveBuffer.removeFirst(receiveBuffer.count - maxReceiveBuffer)
@@ -276,9 +302,29 @@ final class AppModel: ObservableObject {
         return false
     }
 
-    private func append(_ entry: LogEntry) {
+    func append(_ entry: LogEntry) {
+        retainedLogBytes += logCost(entry)
         logs.append(entry)
-        if logs.count > maxLogEntries { logs.removeFirst(logs.count - maxLogEntries) }
+        guard logs.count > maxLogEntries || retainedLogBytes > maxLogBytes else { return }
+
+        // Trim in batches to avoid O(n) removeFirst work on every high-rate
+        // serial read after reaching the limit.
+        var removeCount = 0
+        var removedBytes = 0
+        while logs.count - removeCount > 1,
+              logs.count - removeCount > targetLogEntries ||
+                retainedLogBytes - removedBytes > targetLogBytes {
+            removedBytes += logCost(logs[removeCount])
+            removeCount += 1
+        }
+        if removeCount > 0 {
+            logs.removeFirst(removeCount)
+            retainedLogBytes -= removedBytes
+        }
+    }
+
+    private func logCost(_ entry: LogEntry) -> Int {
+        entry.data.count + (entry.message?.utf8.count ?? 0) + 128
     }
 
     private func report(_ message: String) {
