@@ -28,15 +28,16 @@ final class SerialPort {
 
     var isOpen: Bool { descriptor >= 0 }
 
+    deinit {
+        close(notify: false)
+    }
+
     func open(session: SerialSession) throws {
         close(notify: false)
         let fd = Darwin.open(session.portPath, O_RDWR | O_NOCTTY | O_NONBLOCK)
         guard fd >= 0 else { throw SerialError.openFailed(session.portPath, errno) }
         do {
             try configure(fd: fd, session: session)
-            if fcntl(fd, F_SETFL, 0) < 0 {
-                throw SerialError.configureFailed("无法切换为阻塞写入模式")
-            }
         } catch {
             Darwin.close(fd)
             throw error
@@ -73,6 +74,13 @@ final class SerialPort {
                 let count = Darwin.write(fd, base.advanced(by: sent), data.count - sent)
                 if count > 0 { sent += count; continue }
                 if count < 0 && errno == EINTR { continue }
+                if count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    var writable = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                    let result = Darwin.poll(&writable, 1, 2_000)
+                    if result > 0 { continue }
+                    if result < 0 && errno == EINTR { continue }
+                    throw SerialError.writeFailed(result == 0 ? ETIMEDOUT : errno)
+                }
                 throw SerialError.writeFailed(errno)
             }
         }
@@ -84,18 +92,34 @@ final class SerialPort {
         var bytes = [UInt8](repeating: 0, count: 8192)
         while true {
             let count = Darwin.read(fd, &bytes, bytes.count)
-            if count > 0 {
+            switch Self.readDisposition(count: count, error: errno) {
+            case .data:
                 onData?(Data(bytes.prefix(count)))
-            } else if count == 0 {
-                handleUnexpectedClose(nil)
+            case .drained:
                 break
-            } else if errno == EAGAIN || errno == EWOULDBLOCK {
-                break
-            } else if errno != EINTR {
-                handleUnexpectedClose(SerialError.openFailed(path ?? "串口", errno))
+            case .retry:
+                continue
+            case .disconnected(let error):
+                handleUnexpectedClose(SerialError.openFailed(path ?? "串口", error))
                 break
             }
         }
+    }
+
+    enum ReadDisposition: Equatable {
+        case data
+        case drained
+        case retry
+        case disconnected(Int32)
+    }
+
+    /// POSIX serial ports configured with VMIN=0 may legally return zero when
+    /// their input queue is drained. It is not an EOF indication.
+    static func readDisposition(count: Int, error: Int32) -> ReadDisposition {
+        if count > 0 { return .data }
+        if count == 0 || error == EAGAIN || error == EWOULDBLOCK { return .drained }
+        if error == EINTR { return .retry }
+        return .disconnected(error)
     }
 
     private func handleUnexpectedClose(_ error: Error?) {
@@ -126,8 +150,9 @@ final class SerialPort {
         case .hardware: options.c_cflag |= tcflag_t(CRTSCTS)
         case .software: options.c_iflag |= tcflag_t(IXON | IXOFF)
         }
+        // Reads are driven by DispatchSource on a nonblocking descriptor.
         options.c_cc.16 = 0 // VMIN
-        options.c_cc.17 = 1 // VTIME, 100 ms
+        options.c_cc.17 = 0 // VTIME
 
         let speed = Self.speedConstant(session.baudRate) ?? speed_t(B9600)
         guard cfsetispeed(&options, speed) == 0,

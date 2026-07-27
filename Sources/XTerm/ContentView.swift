@@ -149,20 +149,21 @@ private struct TerminalView: View {
     }
 
     private var logArea: some View {
-        ScrollViewReader { proxy in
-            List(model.logs) { entry in
-                LogRow(entry: entry, session: model.selectedSession)
-                    .id(entry.id)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 2, leading: 10, bottom: 2, trailing: 10))
-            }
-            .listStyle(.plain)
-            .font(.system(.body, design: .monospaced))
-            .textSelection(.enabled)
-            .onChange(of: model.logs.last?.id) { id in
-                if followTail, let id { proxy.scrollTo(id, anchor: .bottom) }
+        Group {
+            if model.selectedSession?.receiveMode == .ascii {
+                SerialTerminalView(model: model)
+            } else {
+                hexLogArea
             }
         }
+    }
+
+    private var hexLogArea: some View {
+        HexLogView(
+            entries: model.logs,
+            timestampEnabled: model.selectedSession?.timestampEnabled ?? true,
+            followTail: followTail
+        )
     }
 
     private var sendArea: some View {
@@ -212,34 +213,4 @@ private struct TerminalView: View {
             model.updateSelected { $0[keyPath: keyPath] = value }
         }
     }
-}
-
-private struct LogRow: View {
-    let entry: LogEntry
-    let session: SerialSession?
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if session?.timestampEnabled == true {
-                Text(Self.formatter.string(from: entry.timestamp))
-                    .foregroundStyle(.tertiary).font(.caption.monospacedDigit())
-            }
-            Text(entry.direction.rawValue)
-                .font(.caption.bold())
-                .foregroundStyle(color)
-                .frame(width: 28, alignment: .leading)
-            Text(entry.message ?? DataCodec.display(entry.data, mode: session?.receiveMode ?? .ascii))
-                .foregroundStyle(entry.direction == .system ? .secondary : .primary)
-                .textSelection(.enabled)
-            Spacer(minLength: 0)
-        }
-    }
-
-    private var color: Color {
-        switch entry.direction { case .received: return .blue; case .sent: return .green; case .system: return .orange }
-    }
-
-    private static let formatter: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f
-    }()
 }

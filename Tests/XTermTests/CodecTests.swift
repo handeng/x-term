@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import XTerm
 
 final class CodecTests: XCTestCase {
@@ -29,5 +30,26 @@ final class CodecTests: XCTestCase {
     func testLRC() {
         let packet = Checksum.append(to: Data([0x01, 0x03, 0x00, 0x00, 0x00, 0x0A]), kind: .lrc)
         XCTAssertEqual(packet.reduce(UInt8(0), &+), 0)
+    }
+
+    func testSerialZeroLengthReadMeansInputDrainedNotDisconnected() {
+        XCTAssertEqual(SerialPort.readDisposition(count: 0, error: 0), .drained)
+        XCTAssertEqual(SerialPort.readDisposition(count: -1, error: EAGAIN), .drained)
+        XCTAssertEqual(SerialPort.readDisposition(count: -1, error: EINTR), .retry)
+        XCTAssertEqual(SerialPort.readDisposition(count: -1, error: EIO), .disconnected(EIO))
+    }
+
+    @MainActor
+    func testLogRetentionIsBoundedByPayloadBytes() {
+        let model = AppModel()
+        let payload = Data(repeating: 0xA5, count: 64 * 1024)
+        for _ in 0..<200 {
+            model.append(LogEntry(timestamp: Date(), direction: .received, data: payload, message: nil))
+        }
+
+        XCTAssertLessThanOrEqual(model.retainedLogBytes, 8 * 1024 * 1024)
+        XCTAssertLessThan(model.logs.count, 200)
+        model.clearLog()
+        XCTAssertEqual(model.retainedLogBytes, 0)
     }
 }
