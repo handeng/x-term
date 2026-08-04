@@ -246,7 +246,7 @@ struct AboutView: View {
                     .frame(width: 96, height: 96)
             }
             Text("XTerm").font(.title.bold())
-            Text("版本 1.1.0").foregroundStyle(.secondary)
+            Text("版本 1.1.1").foregroundStyle(.secondary)
             Text("原生 macOS 串口终端")
             Link(contactEmail, destination: URL(string: "mailto:\(contactEmail)")!)
                 .textSelection(.enabled)

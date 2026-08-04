@@ -39,6 +39,10 @@ struct ContentView: View {
                 .environmentObject(model)
                 .frame(minWidth: 760, minHeight: 600)
         }
+        .onDisappear {
+            // A serial session must not continue receiving after its window is closed.
+            model.disconnect()
+        }
     }
 }
 

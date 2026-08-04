@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct XTermApp: App {
+    @NSApplicationDelegateAdaptor(XTermAppDelegate.self) private var appDelegate
     @StateObject private var appModel = AppModel()
 
     var body: some Scene {
@@ -35,6 +36,12 @@ struct XTermApp: App {
         .commands {
             AboutCommands()
         }
+    }
+}
+
+final class XTermAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
     }
 }
 
