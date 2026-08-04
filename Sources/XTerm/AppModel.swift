@@ -21,6 +21,7 @@ final class AppModel: ObservableObject {
     private var loginTask: Task<Void, Never>?
     private var receiveBuffer = Data()
     private var manualDisconnect = false
+    private var activeConnectionID: SerialPort.ConnectionID?
     private var cancellables: Set<AnyCancellable> = []
     private var terminalHandler: ((Data?) -> Void)?
     private(set) var retainedLogBytes = 0
@@ -39,11 +40,19 @@ final class AppModel: ObservableObject {
         store.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
-        serial.onData = { [weak self] data in
-            Task { @MainActor in self?.handleReceived(data) }
+        serial.onData = { [weak self] data, connectionID in
+            guard let self,
+                  self.isConnected,
+                  self.activeConnectionID == connectionID else { return }
+            self.handleReceived(data)
         }
-        serial.onDisconnect = { [weak self] error in
-            Task { @MainActor in self?.handleDisconnect(error) }
+        serial.onDisconnect = { [weak self] connectionID, error in
+            guard let self, self.activeConnectionID == connectionID else { return }
+            self.handleDisconnect(error, connectionID: connectionID)
+        }
+        serial.onReceiveOverflow = { [weak self] droppedBytes, connectionID in
+            guard let self, self.activeConnectionID == connectionID else { return }
+            self.append(.system("界面处理速度不足，已丢弃 \(droppedBytes) 字节接收数据以保护内存"))
         }
         refreshPorts()
         portRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -95,7 +104,8 @@ final class AppModel: ObservableObject {
         reconnectTask?.cancel()
         isConnecting = true
         do {
-            try serial.open(session: session)
+            let connectionID = try serial.open(session: session)
+            activeConnectionID = connectionID
             isConnected = true
             isConnecting = false
             statusText = "已连接 · \(session.portPath) · \(session.baudRate) \(session.dataBits)\(parityLetter(session.parity))\(session.stopBits)"
@@ -110,6 +120,7 @@ final class AppModel: ObservableObject {
 
     func disconnect() {
         manualDisconnect = true
+        activeConnectionID = nil
         reconnectTask?.cancel()
         stopAutomation()
         serial.close()
@@ -226,8 +237,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func handleDisconnect(_ error: Error?) {
-        guard isConnected || isConnecting else { return }
+    private func handleDisconnect(_ error: Error?, connectionID: SerialPort.ConnectionID) {
+        guard activeConnectionID == connectionID, isConnected || isConnecting else { return }
+        activeConnectionID = nil
         stopAutomation()
         isConnected = false
         isConnecting = false
