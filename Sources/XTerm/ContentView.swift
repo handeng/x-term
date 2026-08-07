@@ -41,7 +41,7 @@ struct ContentView: View {
         }
         .onDisappear {
             // A serial session must not continue receiving after its window is closed.
-            model.disconnect()
+            model.shutdown()
         }
     }
 }
@@ -132,6 +132,11 @@ private struct TerminalView: View {
             Circle().fill(model.isConnected ? .green : model.isConnecting ? .orange : .secondary)
                 .frame(width: 9, height: 9)
             Text(model.statusText).font(.caption).foregroundStyle(.secondary)
+            if model.isRecordingLog {
+                Label(model.recordingFileName, systemImage: "record.circle.fill")
+                    .font(.caption).foregroundStyle(.red).lineLimit(1)
+                    .help("正在实时保存日志")
+            }
             Spacer()
             if model.selectedSession != nil {
                 Picker("显示", selection: sessionBinding(\.receiveMode)) {
@@ -144,6 +149,12 @@ private struct TerminalView: View {
             Menu {
                 Button("复制全部") { model.copyLog() }
                 Button("导出日志…") { model.exportLog() }
+                Divider()
+                if model.isRecordingLog {
+                    Button("停止实时保存") { model.stopRealtimeLog() }
+                } else {
+                    Button("实时保存为 CSV…") { model.startRealtimeLog() }
+                }
                 Divider()
                 Button("清空") { model.clearLog() }
             } label: { Image(systemName: "ellipsis.circle") }
@@ -192,14 +203,44 @@ private struct TerminalView: View {
                             Text("高字节在前").tag(false)
                         }.frame(width: 150)
                     }
+                    Picker("编码", selection: sessionBinding(\.characterEncoding)) {
+                        ForEach(CharacterEncoding.allCases) { Text($0.displayName).tag($0) }
+                    }.frame(width: 165)
                 }
                 Spacer()
+            }
+            if model.isSendingFile {
+                HStack(spacing: 8) {
+                    ProgressView(value: model.fileSendProgress).frame(maxWidth: 240)
+                    Text("正在发送 \(model.fileSendName) · \(Int(model.fileSendProgress * 100))%")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Button("取消") { model.cancelFileSend() }
+                }.frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack(alignment: .bottom, spacing: 10) {
                 TextEditor(text: $model.sendText)
                     .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 54, maxHeight: 100)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
+                Menu {
+                    if let history = model.selectedSession?.sendHistory, !history.isEmpty {
+                        ForEach(Array(history.prefix(20))) { item in
+                            Button(historyTitle(item)) { model.restoreHistory(item) }
+                        }
+                        Divider()
+                        Button("清空历史", role: .destructive) { model.clearSendHistory() }
+                    } else {
+                        Text("暂无发送历史")
+                    }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+                .help("发送历史")
+                Button { model.chooseAndSendFile() } label: {
+                    Label("文件", systemImage: "doc.badge.arrow.up")
+                }
+                .disabled(!model.isConnected || model.isSendingFile)
+                .help("分块发送 TXT、CSV 或二进制文件")
                 Button("发送") { model.sendCurrent() }
                     .keyboardShortcut(.return, modifiers: [.command])
                     .buttonStyle(.borderedProminent)
@@ -216,5 +257,12 @@ private struct TerminalView: View {
         } set: { value in
             model.updateSelected { $0[keyPath: keyPath] = value }
         }
+    }
+
+    private func historyTitle(_ item: SendHistoryItem) -> String {
+        let oneLine = item.payload.replacingOccurrences(of: "\n", with: "↵")
+            .replacingOccurrences(of: "\r", with: "")
+        let clipped = oneLine.count > 48 ? String(oneLine.prefix(48)) + "…" : oneLine
+        return "[\(item.mode.rawValue)] \(clipped)"
     }
 }

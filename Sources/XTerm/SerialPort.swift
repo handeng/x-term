@@ -17,7 +17,7 @@ enum SerialError: LocalizedError {
     }
 }
 
-final class SerialPort {
+final class SerialPort: @unchecked Sendable {
     typealias ConnectionID = UUID
 
     var onData: (@MainActor (Data, ConnectionID) -> Void)?
@@ -102,23 +102,56 @@ final class SerialPort {
         guard fd >= 0 else { throw SerialError.notConnected }
 
         try queue.sync {
-            guard isCurrent(id) else { throw SerialError.notConnected }
-            var sent = 0
-            try data.withUnsafeBytes { buffer in
-                guard let base = buffer.baseAddress else { return }
-                while sent < data.count {
-                    let count = Darwin.write(fd, base.advanced(by: sent), data.count - sent)
-                    if count > 0 { sent += count; continue }
-                    if count < 0 && errno == EINTR { continue }
-                    if count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        var writable = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                        let result = Darwin.poll(&writable, 1, 2_000)
-                        if result > 0 { continue }
-                        if result < 0 && errno == EINTR { continue }
-                        throw SerialError.writeFailed(result == 0 ? ETIMEDOUT : errno)
-                    }
-                    throw SerialError.writeFailed(errno)
+            try writeOnQueue(data, fd: fd, connectionID: id)
+        }
+    }
+
+    /// Writes without blocking the main actor. Large file transfers use this path
+    /// so a slow serial peer cannot freeze the window for the poll timeout.
+    func writeAsync(_ data: Data) async throws {
+        let (fd, id) = connectionSnapshot()
+        guard fd >= 0 else { throw SerialError.notConnected }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(throwing: SerialError.notConnected)
+                    return
                 }
+                do {
+                    try self.writeOnQueue(data, fd: fd, connectionID: id)
+                    continuation.resume(returning: ())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func connectionSnapshot() -> (Int32, ConnectionID?) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return (descriptor, connectionID)
+    }
+
+    private func writeOnQueue(_ data: Data, fd: Int32, connectionID id: ConnectionID?) throws {
+        guard isCurrent(id) else { throw SerialError.notConnected }
+        var sent = 0
+        try data.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            while sent < data.count {
+                guard isCurrent(id) else { throw SerialError.notConnected }
+                let count = Darwin.write(fd, base.advanced(by: sent), data.count - sent)
+                if count > 0 { sent += count; continue }
+                if count < 0 && errno == EINTR { continue }
+                if count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    var writable = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                    let result = Darwin.poll(&writable, 1, 2_000)
+                    if result > 0 { continue }
+                    if result < 0 && errno == EINTR { continue }
+                    throw SerialError.writeFailed(result == 0 ? ETIMEDOUT : errno)
+                }
+                throw SerialError.writeFailed(errno)
             }
         }
     }
@@ -267,8 +300,15 @@ final class SerialPort {
         cfmakeraw(&options)
         options.c_cflag |= tcflag_t(CLOCAL | CREAD)
         options.c_cflag &= ~tcflag_t(CSIZE | PARENB | PARODD | CSTOPB | CRTSCTS)
-        options.c_cflag |= session.dataBits == 7 ? tcflag_t(CS7) : tcflag_t(CS8)
+        switch session.dataBits {
+        case 5: options.c_cflag |= tcflag_t(CS5)
+        case 6: options.c_cflag |= tcflag_t(CS6)
+        case 7: options.c_cflag |= tcflag_t(CS7)
+        case 8: options.c_cflag |= tcflag_t(CS8)
+        default: throw SerialError.configureFailed("数据位必须为 5、6、7 或 8")
+        }
 
+        // POSIX represents 1.5 stop bits as CSTOPB with a 5-bit word.
         if session.stopBits == 2 { options.c_cflag |= tcflag_t(CSTOPB) }
         switch session.parity {
         case .none: break

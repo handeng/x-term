@@ -1,21 +1,43 @@
 import Foundation
+import CoreFoundation
 
 enum CodecError: LocalizedError {
     case invalidHex(String)
+    case textCannotBeEncoded(CharacterEncoding)
 
     var errorDescription: String? {
         switch self {
         case .invalidHex(let token): return "无效 HEX 数据：\(token)。请输入成对十六进制字节，例如 01 03 00 FF。"
+        case .textCannotBeEncoded(let encoding):
+            return "内容包含无法用 \(encoding.displayName) 表示的字符，请更换字符编码或修改内容。"
+        }
+    }
+}
+
+extension CharacterEncoding {
+    var foundationEncoding: String.Encoding {
+        switch self {
+        case .utf8: return .utf8
+        case .ascii: return .ascii
+        case .gb18030:
+            return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)
+            ))
+        case .latin1: return .isoLatin1
         }
     }
 }
 
 enum DataCodec {
-    static func encode(_ text: String, mode: DataMode, lineEnding: LineEnding = .none) throws -> Data {
+    static func encode(_ text: String, mode: DataMode, lineEnding: LineEnding = .none,
+                       encoding: CharacterEncoding = .utf8) throws -> Data {
         var bytes: [UInt8]
         switch mode {
         case .ascii:
-            bytes = Array(text.utf8)
+            guard let data = text.data(using: encoding.foundationEncoding, allowLossyConversion: false) else {
+                throw CodecError.textCannotBeEncoded(encoding)
+            }
+            bytes = Array(data)
         case .hex:
             let cleaned = text
                 .replacingOccurrences(of: "0x", with: "", options: .caseInsensitive)
@@ -35,14 +57,63 @@ enum DataCodec {
         return Data(bytes)
     }
 
-    static func display(_ data: Data, mode: DataMode) -> String {
+    static func display(_ data: Data, mode: DataMode,
+                        encoding: CharacterEncoding = .utf8) -> String {
         switch mode {
         case .ascii:
-            return String(decoding: data, as: UTF8.self)
+            let decoded = String(data: data, encoding: encoding.foundationEncoding)
+                ?? String(decoding: data, as: UTF8.self)
+            return decoded
                 .replacingOccurrences(of: "\0", with: "␀")
         case .hex:
             return data.map { String(format: "%02X", $0) }.joined(separator: " ")
         }
+    }
+}
+
+/// Converts serial text to UTF-8 while retaining up to three trailing bytes
+/// when a UTF-8 or GB18030 character is split across read callbacks.
+final class TerminalTextTranscoder {
+    private var pending = Data()
+    private var activeEncoding: CharacterEncoding = .utf8
+
+    func reset() {
+        pending.removeAll(keepingCapacity: true)
+        activeEncoding = .utf8
+    }
+
+    func transcode(_ data: Data, encoding: CharacterEncoding) -> Data {
+        if encoding != activeEncoding {
+            pending.removeAll(keepingCapacity: true)
+            activeEncoding = encoding
+        }
+        if encoding == .ascii {
+            return Data(data.flatMap { byte in
+                byte < 0x80 ? [byte] : Array("�".utf8)
+            })
+        }
+        if encoding == .latin1 {
+            return Data((String(data: data, encoding: .isoLatin1) ?? "").utf8)
+        }
+
+        pending.append(data)
+        let maximumTail = min(3, pending.count)
+        for tailCount in 0...maximumTail {
+            let prefixCount = pending.count - tailCount
+            guard prefixCount > 0 else { continue }
+            let prefix = pending.prefix(prefixCount)
+            if let text = String(data: prefix, encoding: encoding.foundationEncoding) {
+                pending = Data(pending.suffix(tailCount))
+                return Data(text.utf8)
+            }
+        }
+
+        // Malformed input must not grow the carry buffer forever. Preserve a
+        // possible trailing character and render the invalid prefix visibly.
+        guard pending.count > 4 else { return Data() }
+        let invalid = pending.prefix(pending.count - 3)
+        pending = Data(pending.suffix(3))
+        return Data(String(decoding: invalid, as: UTF8.self).utf8)
     }
 }
 
